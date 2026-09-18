@@ -1,6 +1,11 @@
 name: Judicial Yuan Historical Import
 
 on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/judicial-import.yml"
+      - "scripts/import_judicial.py"
   workflow_dispatch:
     inputs:
       max_months:
