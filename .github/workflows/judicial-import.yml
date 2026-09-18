@@ -1,0 +1,49 @@
+name: Judicial Yuan Historical Import
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_months:
+        description: "Maximum months to process in this run"
+        required: false
+        default: "4"
+  schedule:
+    - cron: "*/30 * * * *"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: judicial-yuan-history-import
+  cancel-in-progress: false
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    env:
+      WORKER_URL: https://dkqwnkplpgiauqknwbci.supabase.co/functions/v1/judicial-github-worker
+      MAX_MONTHS: ${{ github.event.inputs.max_months || '4' }}
+      MAX_RUNTIME_SECONDS: "18000"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install extraction tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y unar p7zip-full
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install requests
+
+      - name: Import Judicial Yuan monthly archives
+        run: python scripts/import_judicial.py
