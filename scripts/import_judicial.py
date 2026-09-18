@@ -20,11 +20,11 @@ OIDC_AUDIENCE = "jiajun-judicial-indexer"
 DOWNLOAD_URL = "https://opendata.judicial.gov.tw/api/FilesetLists/{fileset_id}/file"
 MAX_MONTHS = int(os.getenv("MAX_MONTHS", "8"))
 MAX_RUNTIME_SECONDS = int(os.getenv("MAX_RUNTIME_SECONDS", str(5 * 60 * 60)))
-MAX_RECORDS_PER_CALL = 25
-MAX_JSON_BYTES_PER_CALL = 4_000_000
+MAX_RECORDS_PER_CALL = 10
+MAX_JSON_BYTES_PER_CALL = 2_000_000
 
 session = requests.Session()
-session.headers.update({"User-Agent": "jiajun-judicial-indexer/1.0"})
+session.headers.update({"User-Agent": "jiajun-judicial-indexer/1.1"})
 
 
 def log(msg):
@@ -49,7 +49,6 @@ def get_oidc_token():
 
 
 def api(action, **payload):
-    # GitHub OIDC tokens are short-lived; obtain a fresh one for each privileged call.
     token = get_oidc_token()
     body = {"action": action, **payload}
     r = session.post(
@@ -150,7 +149,6 @@ def iter_json_records(obj):
     if looks_like_record(obj):
         yield obj
         return
-    # Common wrappers first, then generic nested traversal.
     for key in ("data", "records", "items", "result", "results"):
         if key in obj:
             yield from iter_json_records(obj[key])
@@ -167,7 +165,6 @@ def iter_records(path):
         try:
             obj = json.loads(text)
         except json.JSONDecodeError:
-            # Some data sets are newline-delimited JSON despite .json extension.
             for line in text.splitlines():
                 line = line.strip()
                 if not line:
@@ -202,9 +199,14 @@ def iter_records(path):
 
 def send_buffer(buf):
     if not buf:
-        return 0, 0, 0
+        return 0, 0, 0, 0
     r = api("ingest", records=buf)
-    return int(r.get("docs", 0)), int(r.get("chunks", 0)), int(r.get("skipped", 0))
+    return (
+        int(r.get("docs", 0)),
+        int(r.get("chunks", 0)),
+        int(r.get("skipped", 0)),
+        int(r.get("unchanged", 0)),
+    )
 
 
 def ingest_directory(out_dir):
@@ -213,7 +215,7 @@ def ingest_directory(out_dir):
     if not recognized:
         raise RuntimeError(f"No recognizable JSON/CSV/TXT files after extraction ({len(files)} files total)")
 
-    total_docs = total_chunks = total_skipped = total_seen = 0
+    total_docs = total_chunks = total_skipped = total_unchanged = total_seen = 0
     buf = []
     buf_bytes = 2
     for path in recognized:
@@ -222,22 +224,32 @@ def ingest_directory(out_dir):
             total_seen += 1
             encoded = json.dumps(record, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             if buf and (len(buf) >= MAX_RECORDS_PER_CALL or buf_bytes + len(encoded) > MAX_JSON_BYTES_PER_CALL):
-                d, c, s = send_buffer(buf)
-                total_docs += d; total_chunks += c; total_skipped += s
-                log(f"Uploaded: docs={total_docs:,}, chunks={total_chunks:,}, seen={total_seen:,}")
+                d, c, s, u = send_buffer(buf)
+                total_docs += d
+                total_chunks += c
+                total_skipped += s
+                total_unchanged += u
+                log(
+                    f"Uploaded: changed={total_docs:,}, unchanged={total_unchanged:,}, "
+                    f"chunks={total_chunks:,}, seen={total_seen:,}"
+                )
                 buf = []
                 buf_bytes = 2
             buf.append(record)
             buf_bytes += len(encoded) + 1
     if buf:
-        d, c, s = send_buffer(buf)
-        total_docs += d; total_chunks += c; total_skipped += s
+        d, c, s, u = send_buffer(buf)
+        total_docs += d
+        total_chunks += c
+        total_skipped += s
+        total_unchanged += u
     if total_seen == 0:
         raise RuntimeError("Recognized files contained no judgment records")
     return {
         "docs": total_docs,
         "chunks": total_chunks,
         "skipped": total_skipped,
+        "unchanged": total_unchanged,
         "seen": total_seen,
         "files": len(recognized),
     }
@@ -261,15 +273,27 @@ def process_one(member_token):
         api("mark_importing", batch_id=batch_id, bytes=size)
         extract_archive(archive, out_dir, fmt)
         result = ingest_directory(out_dir)
+        valid_docs = result["docs"] + result["unchanged"]
         api(
             "complete",
             batch_id=batch_id,
-            docs=result["docs"],
+            docs=valid_docs,
             chunks=result["chunks"],
             bytes=size,
-            meta={"files": result["files"], "records_seen": result["seen"], "skipped": result["skipped"], "worker": "github-actions"},
+            meta={
+                "files": result["files"],
+                "records_seen": result["seen"],
+                "changed": result["docs"],
+                "unchanged": result["unchanged"],
+                "skipped": result["skipped"],
+                "worker": "github-actions-v2",
+            },
         )
-        log(f"DONE {ym}: docs={result['docs']:,}, chunks={result['chunks']:,}, records={result['seen']:,}")
+        log(
+            f"DONE {ym}: valid_docs={valid_docs:,}, changed={result['docs']:,}, "
+            f"unchanged={result['unchanged']:,}, chunks_written={result['chunks']:,}, "
+            f"records={result['seen']:,}"
+        )
         return True
     except Exception as e:
         log(f"FAILED {ym}: {e}")
@@ -285,7 +309,6 @@ def process_one(member_token):
 def main():
     started = time.time()
     log(f"Worker starting; max_months={MAX_MONTHS}, max_runtime={MAX_RUNTIME_SECONDS}s")
-    # One Judicial Yuan member token is valid long enough for a multi-month run.
     member_token = get_member_token()
     completed_attempts = 0
     while completed_attempts < MAX_MONTHS and (time.time() - started) < MAX_RUNTIME_SECONDS:
