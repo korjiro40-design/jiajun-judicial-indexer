@@ -1,0 +1,59 @@
+name: Judicial Chinese Embeddings
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/judicial-embeddings.yml"
+      - "scripts/embed_judicial.py"
+  workflow_dispatch:
+    inputs:
+      max_chunks:
+        description: "Maximum chunks to embed in this run"
+        required: false
+        default: "5000"
+  schedule:
+    - cron: "10,40 * * * *"
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: judicial-chinese-embeddings
+  cancel-in-progress: false
+
+jobs:
+  embed:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    env:
+      EMBED_WORKER_URL: https://dkqwnkplpgiauqknwbci.supabase.co/functions/v1/judicial-embedding-worker
+      MAX_CHUNKS: ${{ github.event.inputs.max_chunks || '5000' }}
+      MAX_RUNTIME_SECONDS: "14400"
+      CLAIM_BATCH: "128"
+      ENCODE_BATCH: "32"
+      HF_HOME: ~/.cache/huggingface
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Cache BGE model
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: bge-small-zh-v1.5-v1
+
+      - name: Install embedding dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install sentence-transformers requests
+
+      - name: Build Chinese semantic embeddings
+        run: python scripts/embed_judicial.py
