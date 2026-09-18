@@ -32,7 +32,7 @@ jobs:
       EMBED_WORKER_URL: https://dkqwnkplpgiauqknwbci.supabase.co/functions/v1/judicial-embedding-worker
       MAX_CHUNKS: ${{ github.event.inputs.max_chunks || '5000' }}
       MAX_RUNTIME_SECONDS: "14400"
-      CLAIM_BATCH: "128"
+      CLAIM_BATCH: "64"
       ENCODE_BATCH: "32"
       HF_HOME: ~/.cache/huggingface
     steps:
@@ -55,6 +55,7 @@ jobs:
       - name: Install embedding dependencies
         run: |
           python -m pip install --upgrade pip
+          pip install --index-url https://download.pytorch.org/whl/cpu torch
           pip install -r requirements.txt
 
       - name: Build Chinese semantic embeddings
