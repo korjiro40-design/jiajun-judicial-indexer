@@ -1,20 +1,12 @@
 name: Judicial Yuan Historical Import
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/judicial-import.yml"
-      - "scripts/import_judicial.py"
-      - "scripts/import_judicial_parallel.py"
   workflow_dispatch:
     inputs:
       max_months:
         description: "Maximum months per worker in this run"
         required: false
-        default: "4"
-  schedule:
-    - cron: "*/30 * * * *"
+        default: "1"
 
 permissions:
   contents: read
@@ -28,17 +20,18 @@ jobs:
   import:
     strategy:
       fail-fast: false
-      max-parallel: 4
+      max-parallel: 1
       matrix:
-        worker: [1, 2, 3, 4]
+        worker: [1]
     runs-on: ubuntu-latest
-    timeout-minutes: 330
+    timeout-minutes: 90
     env:
       WORKER_URL: https://dkqwnkplpgiauqknwbci.supabase.co/functions/v1/judicial-github-worker
       CLAIM_URL: https://dkqwnkplpgiauqknwbci.supabase.co/functions/v1/judicial-github-claim
-      MAX_MONTHS: ${{ github.event.inputs.max_months || '4' }}
-      MAX_RUNTIME_SECONDS: "18000"
+      MAX_MONTHS: ${{ github.event.inputs.max_months || '1' }}
+      MAX_RUNTIME_SECONDS: "3600"
       WORKER_SLOT: ${{ matrix.worker }}
+      API_MAX_ATTEMPTS: "5"
     steps:
       - name: Checkout
         uses: actions/checkout@v4
