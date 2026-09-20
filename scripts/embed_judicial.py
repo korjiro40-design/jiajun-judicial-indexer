@@ -18,6 +18,8 @@ CLAIM_BATCH = int(os.getenv("CLAIM_BATCH", "128"))
 ENCODE_BATCH = int(os.getenv("ENCODE_BATCH", "32"))
 MAX_CHUNKS = int(os.getenv("MAX_CHUNKS", "5000"))
 MAX_RUNTIME_SECONDS = int(os.getenv("MAX_RUNTIME_SECONDS", str(4 * 60 * 60)))
+API_MAX_ATTEMPTS = int(os.getenv("API_MAX_ATTEMPTS", "5"))
+RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 
 session = requests.Session()
 session.headers.update({"User-Agent": "jiajun-judicial-embedder/1.0"})
@@ -45,20 +47,37 @@ def get_oidc_token():
 
 
 def api(action, **payload):
-    token = get_oidc_token()
-    r = session.post(
-        WORKER_URL,
-        headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
-        data=json.dumps({"action": action, **payload}, ensure_ascii=False).encode("utf-8"),
-        timeout=180,
-    )
-    try:
-        data = r.json()
-    except Exception:
-        raise RuntimeError(f"Worker HTTP {r.status_code}: {r.text[:1000]}")
-    if not r.ok or not data.get("ok"):
-        raise RuntimeError(data.get("error") or f"Worker HTTP {r.status_code}")
-    return data
+    body = json.dumps({"action": action, **payload}, ensure_ascii=False).encode("utf-8")
+    last_error = None
+    for attempt in range(1, API_MAX_ATTEMPTS + 1):
+        try:
+            token = get_oidc_token()
+            r = session.post(
+                WORKER_URL,
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+                data=body,
+                timeout=180,
+            )
+            try:
+                data = r.json()
+            except Exception:
+                data = {}
+            if r.ok and data.get("ok"):
+                return data
+            message = data.get("error") or f"Worker HTTP {r.status_code}: {r.text[:1000]}"
+            last_error = RuntimeError(message)
+            retryable = r.status_code in RETRYABLE_STATUS or any(
+                code in message for code in ("57014", "53100", "PGRST002")
+            )
+            if not retryable:
+                raise last_error
+        except requests.RequestException as exc:
+            last_error = exc
+        if attempt < API_MAX_ATTEMPTS:
+            delay = min(120, 5 * (3 ** (attempt - 1)))
+            log(f"{action} temporarily unavailable; retry {attempt}/{API_MAX_ATTEMPTS} in {delay}s: {last_error}")
+            time.sleep(delay)
+    raise RuntimeError(f"{action} failed after {API_MAX_ATTEMPTS} attempts: {last_error}")
 
 
 def main():
