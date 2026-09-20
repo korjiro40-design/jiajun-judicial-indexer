@@ -1,20 +1,12 @@
 name: Judicial Chinese Embeddings
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - ".github/workflows/judicial-embeddings.yml"
-      - "scripts/embed_judicial.py"
-      - "requirements.txt"
   workflow_dispatch:
     inputs:
       max_chunks:
         description: "Maximum chunks to embed in this run"
         required: false
-        default: "5000"
-  schedule:
-    - cron: "10,40 * * * *"
+        default: "500"
 
 permissions:
   contents: read
@@ -27,13 +19,14 @@ concurrency:
 jobs:
   embed:
     runs-on: ubuntu-latest
-    timeout-minutes: 300
+    timeout-minutes: 90
     env:
       EMBED_WORKER_URL: https://dkqwnkplpgiauqknwbci.supabase.co/functions/v1/judicial-embedding-worker
-      MAX_CHUNKS: ${{ github.event.inputs.max_chunks || '5000' }}
-      MAX_RUNTIME_SECONDS: "14400"
-      CLAIM_BATCH: "64"
-      ENCODE_BATCH: "32"
+      MAX_CHUNKS: ${{ github.event.inputs.max_chunks || '500' }}
+      MAX_RUNTIME_SECONDS: "3600"
+      CLAIM_BATCH: "16"
+      ENCODE_BATCH: "16"
+      API_MAX_ATTEMPTS: "5"
       HF_HOME: ~/.cache/huggingface
     steps:
       - name: Checkout
